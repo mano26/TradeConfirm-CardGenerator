@@ -4,6 +4,17 @@ Option Explicit
 Sub ClearConfirmationOutput()
     Dim ws As Worksheet
     Set ws = ThisWorkbook.Sheets("GFI Upload Template")
+
+    ' Save btnProcessTrade position before clearing
+    Dim btnLeft As Double, btnTop As Double
+    Dim btnWidth As Double, btnHeight As Double
+    On Error Resume Next
+    btnLeft = ws.Shapes("btnProcessTrade").Left
+    btnTop = ws.Shapes("btnProcessTrade").Top
+    btnWidth = ws.Shapes("btnProcessTrade").Width
+    btnHeight = ws.Shapes("btnProcessTrade").Height
+    On Error GoTo 0
+
     ws.Range("C5:R1000").ClearContents
     ws.Range("S5:S1000").ClearContents
     ws.Range("T5:T1000").ClearContents
@@ -11,9 +22,9 @@ Sub ClearConfirmationOutput()
     ws.Range("J5:J1000").Interior.ColorIndex = xlNone
     ws.Range("S5:S1000").Interior.ColorIndex = xlNone
 
-    ' Hide and narrow cols T and U
-    ws.Columns("T").ColumnWidth = 0.5
-    ws.Columns("U").ColumnWidth = 0.5
+    ' Hide cols T and U
+    ws.Columns("T").Hidden = True
+    ws.Columns("U").Hidden = True
 
     ' Restore counterparty section headers
     ws.Range("B12").Value = "DATE"
@@ -24,8 +35,18 @@ Sub ClearConfirmationOutput()
     ws.Range("G12").Value = "BRACKET"
     ws.Range("H12").Value = "NOTES"
 
+    ' Restore btnProcessTrade position and visibility
     On Error Resume Next
-    ThisWorkbook.Sheets("GFI Upload Template").Shapes("btnGenerateCards").Visible = False
+    ws.Shapes("btnProcessTrade").Left = btnLeft
+    ws.Shapes("btnProcessTrade").Top = btnTop
+    ws.Shapes("btnProcessTrade").Width = btnWidth
+    ws.Shapes("btnProcessTrade").Height = btnHeight
+    ws.Shapes("btnProcessTrade").Visible = True
+    On Error GoTo 0
+
+    ' Hide Generate Cards button
+    On Error Resume Next
+    ws.Shapes("btnGenerateCards").Visible = False
     On Error GoTo 0
 End Sub
 

@@ -1,30 +1,4 @@
 Attribute VB_Name = "CardGenerator"
-
-' ================================================================
-' MODULE: CardGenerator — V2 Final (equal rows, flexbox layout)
-' - Cards sized exactly 3.5in x 5.5in
-' - 2 cards per letter page when printed
-' - All 5 slots equal height via flexbox
-' - CP cell splits exactly 50/50: symbol top, clearing# bottom
-' - Font size 14px data, 11px headers
-' - EXECUTING BROKER large centered, same line as card type
-' - CALL/PUT/FUTURES + BUYER/SELLER left-aligned
-' - DATE removed from cards
-' - Blue ink = BUYER, Red ink = SELLER (all card types)
-' - MO read from col T (raw card code via GetCardMoCode)
-' - Ticket number check blocks generation if missing
-' - Missing price check with yellow highlight
-'
-' Sheet 1 counterparty table (row 12 = header, rows 13-32 = data):
-'   C12 = DATE (=TODAY())
-'   D   = QTY             (col 4)
-'   E   = SYMBOL          (col 5)  e.g. FRH/365
-'   F   = EXECUTING BROKER(col 6)
-'   G   = BRACKET         (col 7)
-'   H   = NOTES           (col 8)
-'   S   = Ticket #        (col 19)
-'   T   = Card MO code    (col 20) written by PrintLeg
-' ================================================================
 Option Explicit
 
 Private Const CP_HDR_ROW      As Long = 12
@@ -37,6 +11,7 @@ Private Const COL_BRACKET     As Long = 7
 Private Const COL_NOTES       As Long = 8
 Private Const COL_TICKET      As Long = 19
 Private Const COL_MO_CARD     As Long = 20
+Private Const COL_PKG_PREM    As Long = 21
 
 Public Sub GenerateCards()
     Dim ws1 As Worksheet
@@ -49,6 +24,7 @@ Public Sub GenerateCards()
     Dim optTypes(1 To 50) As String
     Dim prices(1 To 50)   As String
     Dim tickets(1 To 50)  As String
+    Dim legRows(1 To 50)  As Long
     Dim legCount As Integer: legCount = 0
 
     Dim r As Long: r = 5
@@ -57,14 +33,21 @@ Public Sub GenerateCards()
         If ws1.Cells(r, 4).Value <> "" Then
             blankRun = 0
             legCount = legCount + 1
+            legRows(legCount) = r
             sides(legCount) = CStr(ws1.Cells(r, 3).Value)
             vols(legCount) = CDbl(ws1.Cells(r, 4).Value)
-            moCards(legCount) = CStr(ws1.Cells(r, COL_MO_CARD).Value)
             optTypes(legCount) = CStr(ws1.Cells(r, 9).Value)
             prices(legCount) = CStr(ws1.Cells(r, 10).Value)
             tickets(legCount) = Trim$(CStr(ws1.Cells(r, COL_TICKET).Value))
 
-            ' Strike with minimum 2 decimal places
+            Dim moVal As String: moVal = Trim$(CStr(ws1.Cells(r, COL_MO_CARD).Value))
+            If moVal = "" Then
+                MsgBox "MO code missing for row " & r & "." & vbNewLine & _
+                       "Please re-process the trade and try again.", vbExclamation
+                Exit Sub
+            End If
+            moCards(legCount) = moVal
+
             If ws1.Cells(r, 8).Value = "" Then
                 strikes(legCount) = ""
             Else
@@ -95,10 +78,10 @@ Public Sub GenerateCards()
     Dim k As Integer
     For k = 1 To legCount
         If tickets(k) = "" Then
-            ws1.Cells(4 + k, COL_TICKET).Interior.Color = RGB(255, 235, 0)
-            missingTicket = missingTicket & "  Row " & (4 + k) & vbNewLine
+            ws1.Cells(legRows(k), COL_TICKET).Interior.Color = RGB(255, 235, 0)
+            missingTicket = missingTicket & "  Row " & legRows(k) & vbNewLine
         Else
-            ws1.Cells(4 + k, COL_TICKET).Interior.ColorIndex = xlNone
+            ws1.Cells(legRows(k), COL_TICKET).Interior.ColorIndex = xlNone
         End If
     Next k
     If Len(missingTicket) > 0 Then
@@ -107,15 +90,15 @@ Public Sub GenerateCards()
         Exit Sub
     End If
 
-    ' Price check — only required for futures legs
+    ' Futures price check
     ws1.Range("J5:J1000").Interior.ColorIndex = xlNone
     Dim missingPrice As String: missingPrice = ""
     For k = 1 To legCount
         Dim isFutLeg As Boolean
         isFutLeg = (optTypes(k) = "" And Trim$(strikes(k)) = "")
         If isFutLeg And Trim$(prices(k)) = "" Then
-            ws1.Cells(4 + k, 10).Interior.Color = RGB(255, 235, 0)
-            missingPrice = missingPrice & "  Row " & (4 + k) & " - Futures " & moCards(k) & vbNewLine
+            ws1.Cells(legRows(k), 10).Interior.Color = RGB(255, 235, 0)
+            missingPrice = missingPrice & "  Row " & legRows(k) & " - Futures " & moCards(k) & vbNewLine
         End If
     Next k
     If Len(missingPrice) > 0 Then
@@ -124,7 +107,12 @@ Public Sub GenerateCards()
         Exit Sub
     End If
 
-    ' Calculate delta ratio for futures qty per counterparty
+    ' Price reconciliation check
+    If Not ValidatePrices(ws1, legCount, legRows, optTypes, strikes, prices) Then
+        Exit Sub
+    End If
+
+    ' Delta ratio for futures qty per counterparty
     Dim totalOptVol As Double: totalOptVol = 0
     Dim totalFutVol As Double: totalFutVol = 0
     For k = 1 To legCount
@@ -152,7 +140,13 @@ Public Sub GenerateCards()
             cpCount = cpCount + 1
             cpQty(cpCount) = IIf(ws1.Cells(rn, COL_QTY).Value = "", 0, CDbl(ws1.Cells(rn, COL_QTY).Value))
             cpSym(cpCount) = sym
-            cpBroker(cpCount) = UCase$(Trim$(CStr(ws1.Cells(rn, COL_EXEC_BROKER).Value)))
+            Dim brkr As String: brkr = UCase$(Trim$(CStr(ws1.Cells(rn, COL_EXEC_BROKER).Value)))
+            If brkr = "" Then
+                MsgBox "No executing broker entered for counterparty '" & sym & "' (row " & rn & ")." & vbNewLine & _
+                       "Please fill column F before generating cards.", vbExclamation
+                Exit Sub
+            End If
+            cpBroker(cpCount) = brkr
             cpBkt(cpCount) = Trim$(UCase$(CStr(ws1.Cells(rn, COL_BRACKET).Value)))
         End If
     Next i
@@ -168,7 +162,6 @@ Public Sub GenerateCards()
 
     Dim isMultiLeg As Boolean: isMultiLeg = (legCount > 1)
 
-    ' Unique brackets in order
     Dim bktList(1 To 20) As String
     Dim bktCount As Integer: bktCount = 0
     Dim b As Integer, bFound As Boolean
@@ -216,7 +209,6 @@ Public Sub GenerateCards()
         For pg = 1 To pages
             Dim cpFrom As Integer: cpFrom = (pg - 1) * 5 + 1
             Dim cpTo   As Integer: cpTo = IIf(pg * 5 <= bCount, pg * 5, bCount)
-
             For k = 1 To legCount
                 html = html & BuildCardHTML(sides(k), vols(k), moCards(k), _
                     strikes(k), optTypes(k), prices(k), _
@@ -241,6 +233,105 @@ Public Sub GenerateCards()
            legCount & " leg(s), " & bktCount & " bracket(s)." & vbNewLine & vbNewLine & _
            "Tip: Set paper to Letter, no scaling.", vbInformation
 End Sub
+
+
+Private Function ValidatePrices(ws As Worksheet, legCount As Integer, _
+    legRows() As Long, optTypes() As String, _
+    strikes() As String, prices() As String) As Boolean
+
+    ValidatePrices = True
+
+    Dim segPrems(1 To 50) As Double
+    Dim segCount As Integer: segCount = 0
+    Dim k As Integer, s As Integer
+    Dim found As Boolean
+
+    For k = 1 To legCount
+        If optTypes(k) = "" And Trim$(strikes(k)) = "" Then GoTo NextLeg
+
+        Dim pkgPrem As Double: pkgPrem = 0
+        On Error Resume Next
+        pkgPrem = CDbl(ws.Cells(legRows(k), COL_PKG_PREM).Value)
+        On Error GoTo 0
+
+        found = False
+        For s = 1 To segCount
+            If segPrems(s) = pkgPrem Then found = True: Exit For
+        Next s
+        If Not found Then
+            segCount = segCount + 1
+            segPrems(segCount) = pkgPrem
+        End If
+NextLeg:
+    Next k
+
+    If segCount = 0 Then Exit Function
+
+    Dim seg As Integer
+    For seg = 1 To segCount
+        Dim pkgPremSeg As Double: pkgPremSeg = segPrems(seg)
+
+        Dim segSides(1 To 50)  As String
+        Dim segVols(1 To 50)   As Double
+        Dim segPrices(1 To 50) As Double
+        Dim segLegCount As Integer: segLegCount = 0
+        Dim allPricesFilled As Boolean: allPricesFilled = True
+
+        For k = 1 To legCount
+            If optTypes(k) = "" And Trim$(strikes(k)) = "" Then GoTo NextLeg2
+
+            Dim lp As Double: lp = 0
+            On Error Resume Next
+            lp = CDbl(ws.Cells(legRows(k), COL_PKG_PREM).Value)
+            On Error GoTo 0
+
+            If lp = pkgPremSeg Then
+                If Trim$(prices(k)) = "" Then
+                    allPricesFilled = False
+                Else
+                    segLegCount = segLegCount + 1
+                    segSides(segLegCount) = ws.Cells(legRows(k), 3).Value
+                    segVols(segLegCount) = CDbl(ws.Cells(legRows(k), 4).Value)
+                    segPrices(segLegCount) = CDbl(prices(k))
+                End If
+            End If
+NextLeg2:
+        Next k
+
+        If Not allPricesFilled Then GoTo NextSeg
+        If segLegCount = 0 Then GoTo NextSeg
+
+        Dim baseVol As Double: baseVol = segVols(1)
+        Dim j As Integer
+        For j = 2 To segLegCount
+            If segVols(j) < baseVol Then baseVol = segVols(j)
+        Next j
+        If baseVol = 0 Then GoTo NextSeg
+
+        Dim netPrem As Double: netPrem = 0
+        For j = 1 To segLegCount
+            Dim legSign As Double
+            legSign = IIf(segSides(j) = "S", 1, -1)
+            netPrem = netPrem + legSign * (segVols(j) / baseVol) * segPrices(j)
+        Next j
+
+        Dim calcNet As Double: calcNet = Abs(netPrem)
+        Dim diff As Double:    diff = Abs(calcNet - pkgPremSeg)
+
+        If diff > 0 Then
+            MsgBox "Price reconciliation failed for segment with package price " & _
+                   Format$(pkgPremSeg, "0.0000") & "." & vbNewLine & vbNewLine & _
+                   "Expected net: " & Format$(pkgPremSeg, "0.0000") & vbNewLine & _
+                   "Calculated net: " & Format$(calcNet, "0.0000") & vbNewLine & _
+                   "Discrepancy: " & Format$(diff, "0.0000") & vbNewLine & vbNewLine & _
+                   "Please check your leg prices in column J.", vbCritical
+            ValidatePrices = False
+            Exit Function
+        End If
+NextSeg:
+    Next seg
+End Function
+
 
 Private Function BuildHTMLHeader(tradeDate As String) As String
     Dim s As String
@@ -352,18 +443,14 @@ Private Function BuildCardHTML(side As String, vol As Double, _
     h = h & "<div class='w-cp' style='border-right:0.5px solid " & ink & "'>" & cpRole & "</div>" & vbNewLine
     h = h & "<div class='w-bkt'>" & bktLbl & "</div>" & vbNewLine
     h = h & "</div>" & vbNewLine
-
     h = h & "<div class='slots'>" & vbNewLine
 
     Dim slot As Integer
     For slot = 1 To 5
         Dim cpIdx As Integer: cpIdx = cpFrom + slot - 1
-
         h = h & "<div class='slot' style='border-color:" & ink & "'>" & vbNewLine
 
         If cpIdx <= cpTo Then
-
-            ' Calculate display quantity
             Dim displayQty As Long
             If isFut Then
                 displayQty = CLng(Round(bQty(cpIdx) * deltaRatio, 0))
@@ -371,15 +458,11 @@ Private Function BuildCardHTML(side As String, vol As Double, _
                 displayQty = CLng(bQty(cpIdx))
             End If
 
-            ' QTY / CARS
             h = h & "<div class='cell w-qty' style='color:" & ink & ";border-color:" & ink & "'>"
             h = h & CStr(displayQty) & "</div>" & vbNewLine
-
-            ' MO
             h = h & "<div class='cell w-mo' style='color:" & ink & ";border-color:" & ink & "'>"
             h = h & UCase$(moCode) & "</div>" & vbNewLine
 
-            ' STRIKE or blank for futures
             If isFut Then
                 h = h & "<div class='cell w-str' style='border-color:" & ink & "'>&nbsp;</div>" & vbNewLine
             Else
@@ -387,11 +470,9 @@ Private Function BuildCardHTML(side As String, vol As Double, _
                 h = h & strike & "</div>" & vbNewLine
             End If
 
-            ' PREM / PRICE
             h = h & "<div class='cell w-pr' style='color:" & ink & ";border-color:" & ink & "'>"
             h = h & price & "</div>" & vbNewLine
 
-            ' Counterparty — split on /
             Dim rawSym As String: rawSym = bSym(cpIdx)
             Dim slashPos As Integer: slashPos = InStr(rawSym, "/")
             Dim symTop As String, symBot As String
@@ -407,13 +488,10 @@ Private Function BuildCardHTML(side As String, vol As Double, _
             h = h & "<div class='cp-top' style='border-color:" & ink & "'>" & symTop & "</div>" & vbNewLine
             h = h & "<div class='cp-bot'>" & symBot & "</div>" & vbNewLine
             h = h & "</div>" & vbNewLine
-
-            ' BKT
             h = h & "<div class='cell w-bkt' style='color:" & ink & ";border-right:none'>"
             h = h & bracket & "</div>" & vbNewLine
 
         Else
-            ' Empty slot
             h = h & "<div class='cell w-qty' style='border-color:" & ink & "'>&nbsp;</div>" & vbNewLine
             h = h & "<div class='cell w-mo' style='border-color:" & ink & "'>&nbsp;</div>" & vbNewLine
             h = h & "<div class='cell w-str' style='border-color:" & ink & "'>&nbsp;</div>" & vbNewLine
@@ -435,5 +513,4 @@ Private Function BuildCardHTML(side As String, vol As Double, _
 
     BuildCardHTML = h
 End Function
-
 
