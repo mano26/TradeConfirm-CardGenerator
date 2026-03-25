@@ -318,7 +318,7 @@ NextLeg2:
         Dim calcNet As Double: calcNet = Abs(netPrem)
         Dim diff As Double:    diff = Abs(calcNet - pkgPremSeg)
 
-        If diff > 0 Then
+        If diff > 0.000001 Then
             MsgBox "Price reconciliation failed for segment with package price " & _
                    Format$(pkgPremSeg, "0.0000") & "." & vbNewLine & vbNewLine & _
                    "Expected net: " & Format$(pkgPremSeg, "0.0000") & vbNewLine & _
