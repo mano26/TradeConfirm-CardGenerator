@@ -350,17 +350,15 @@ Public Function PeekCurrentTicketNumber() As Long
 End Function
 Public Function GetOutputFolder() As String
     Dim basePath As String
-    basePath = "C:\Users\apexb\OneDrive\Desktop\AXIS_Output"
+    basePath = CreateObject("WScript.Shell").SpecialFolders("Desktop") & "\AXIS_Output"
     
     Dim datePath As String
     datePath = basePath & "\" & Format$(Now(), "MMDDYYYY")
     
-    ' Create base folder if it doesn't exist
     If Dir(basePath, vbDirectory) = "" Then
         MkDir basePath
     End If
     
-    ' Create date subfolder if it doesn't exist
     If Dir(datePath, vbDirectory) = "" Then
         MkDir datePath
     End If
