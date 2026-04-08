@@ -441,6 +441,7 @@ Private Function BuildCardHTML(side As String, vol As Double, _
     Next slot
     h = h & "</div>"
     h = h & "<div class='card-footer' style='color:" & ink & ";border-color:" & ink & "'>"
+    h = h & "</div>"
     h = h & "</div>" & vbNewLine
     BuildCardHTML = h
 End Function
